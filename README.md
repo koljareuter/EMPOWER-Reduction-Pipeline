@@ -81,12 +81,51 @@ The final cubes are `procdir/<OB>/science/SCI_RECONSTRUCTED_*_s_i_bkg2d_rv_tell.
 For YJ or H, set `obsband` accordingly. For H, use `ZAPv2_SVD_H_n500004_nomean.fits` as `svd_path`;
 for YJ, leave `svd_path` out to use the bundled basis.
 
-### Optional: patched KMOS DRP
+## Reproducing the EMPOWER cubes
 
-The EMPOWER production runs used a KMOS DRP patched to use a linear (instead of quadratic)
-OH-line wavelength correction, selected with `recipe_dir` and `lcorr_degree = 1` in `[cubes]`, together with
-an updated IZ OH spectrum (`oh_spec_iz`). These options are not needed for a standard reduction;
-without them the stock esorex recipes are used.
+The pipeline runs with a standard ESO installation. To get the same cubes as the EMPOWER reduction,
+these four things must match:
+
+**1. KMOS pipeline 4.5.11.** All EMPOWER data were reduced with the KMOS 4.5.11 pipeline kit
+(`kmos-kit-4.5.11`: esorex 3.13.10, CPL 7.3.2) and its static calibrations, which `KMOS_CALIB` must point to.
+Older versions have not been tested, and their recipes and calibration files can differ. Check with
+`esorex --version` and `ls $KMOS_CALIB`.
+
+**2. New IZ OH spectrum.** `kmos_sci_red` corrects the wavelength solution of every frame and IFU with the OH
+lines of a reference spectrum. The standard `kmos_oh_spec_iz.fits` of KMOS 4.5.11 has only 10 usable lines, all at
+0.98-1.09 µm; the correction is extrapolated down to 0.78 µm, and object and sky frames end up misaligned by
+7-29 km/s (median 13 km/s) at 0.79-0.87 µm, which leaves OH residuals in the Hβ range of z ≈ 0.6-0.8 targets.
+EMPOWER uses `pyspark/data/kmos_oh_spec_iz_NEW.fits` instead (same format and header, 27 usable lines, the bluest
+at 0.835 µm), set in the config with `oh_spec_iz`. YJ and H use the standard files.
+
+**3. Patched `kmos_sci_red` (the only change to ESO code).** The OH wavelength correction in
+`kmos/kmo_priv_lcorr.c` fits a hard-coded 2nd-order polynomial. For EMPOWER the KMOS 4.5.11 source was patched
+(`drp_patch/kmos_lcorr_degree_patch.py`) so that the degree can be set with the environment variable
+`KMOS_LCORR_DEGREE`; nothing else in the DRP was changed. Without the variable the patched recipes give
+bit-identical results to the standard ones. The EMPOWER reduction used degree 1 (linear) for IZ and YJ and the
+standard degree 2 for H. In the worst IZ OB this lowered the object-sky misalignment at Hβ from 7.1 to
+5.0 km/s and the scatter between IFUs from 4.3 to 1.8 km/s (with the new OH spectrum in both cases); YJ
+changes by less than 0.2 km/s, and in H the linear fit is slightly worse.
+
+Build it next to the existing installation (the existing one is not modified):
+```bash
+PIPE=/path/to/kmos/install TARBALL=/path/to/kmos-4.5.11.tar.gz DEST=/path/to/KMOS_4.5.11_lcorr \
+    bash drp_patch/build_kmos_lcorr_drp.sh
+```
+`kmos-4.5.11.tar.gz` is inside the KMOS 4.5.11 pipeline kit (md5 `f8d1e09b7516834bb7edbbc69e3ec9e7`).
+Then enable `recipe_dir` and `lcorr_degree` in `[cubes]`. pyspark passes them to esorex only for
+`kmos_sci_red`; the recipe log confirms the setting with a line `OH lambda correction: polynomial degree 1`.
+Without the patch you get the standard quadratic correction.
+
+**4. Detector-3 flats on seven IZ nights.** On the IZ nights 2026-01-13, 01-14 and 02-10 to 02-14, `kmos_flat`
+with the default `-badpix_thresh=10` rejects detector 3 as vignetted, and IFUs 18-24 end up empty.
+The EMPOWER reduction used `flat_args = -cmethod=ksigma -badpix_thresh=35` in `[calibration]` for those nights.
+
+Everything else is the standard ESO software: pyspark calls the plain `esorex` on the `PATH` with the recipe
+options in its code, and parameters it doesn't set keep the KMOS 4.5.11 recipe defaults. The EMPOWER reduction
+ran without any esorex configuration files; esorex would read `~/.esorex/esorex.rc` or `~/.esorex/<recipe>.rc`
+if they exist, so make sure there are none. The final combination of the cubes (`kmos_combine` / EDPS) is not part
+of this repository.
 
 ## Troubleshooting
 

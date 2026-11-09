@@ -126,6 +126,7 @@ if __name__ == "__main__":
                                   "data/RESPONSE_HHH.fits",
                                   "data/RESPONSE_HKHKHK.fits",
                                   "data/RESPONSE_KKK.fits",
+                                  "data/kmos_oh_spec_iz_NEW.fits",
                                   ]},
         include_package_data=True,
         zip_safe=False,

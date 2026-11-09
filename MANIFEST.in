@@ -15,3 +15,4 @@ include pyspark/data/RESPONSE_YJYJYJ.fits
 include pyspark/data/RESPONSE_HHH.fits
 include pyspark/data/RESPONSE_HKHKHK.fits
 include pyspark/data/RESPONSE_KKK.fits
+include pyspark/data/kmos_oh_spec_iz_NEW.fits
