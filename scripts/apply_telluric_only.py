@@ -6,9 +6,9 @@ telluric_correct() on existing _rv.fits files, producing _rv_tell.fits.
 OBs where _rv_tell.fits already exist are skipped unless --overwrite is set.
 
 Usage (from the repository root):
-    python scripts/apply_telluric_only.py -p examples/empower_IZ.cfg
+    python scripts/apply_telluric_only.py -p examples/empower.cfg
     # overwrite existing, skip January OBs:
-    python scripts/apply_telluric_only.py -p examples/empower_IZ.cfg \
+    python scripts/apply_telluric_only.py -p examples/empower.cfg \
         --overwrite --skip-pattern KMOS.2026-01
 """
 import os, glob, argparse

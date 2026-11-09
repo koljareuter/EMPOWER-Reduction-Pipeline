@@ -9,7 +9,7 @@ Use --skip-pattern to exclude OBs whose folder name contains a substring,
 e.g. 'KMOS.2026-01' to skip January OBs.
 
 Usage (from the repository root):
-    python scripts/rerun_rv_tell.py -p examples/empower_IZ.cfg \
+    python scripts/rerun_rv_tell.py -p examples/empower.cfg \
         --skip-pattern KMOS.2026-01
 """
 import os, glob, argparse

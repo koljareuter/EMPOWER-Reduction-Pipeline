@@ -202,6 +202,10 @@ def zap_sky_v2(matched_exposures, logger=None, obsband=None, subdir=None,
             hybrid_min_dangle=20., hybrid_wing=0, hybrid_oh_model='median', hybrid_free_model='tmpl', hybrid_edge=0,
             sky_align=False, **kwargs):
 
+    # per-band eigenbasis (svd_path_<band>, e.g. svd_path_iz) takes precedence over svd_path,
+    # so one run over several bands can use a different basis for each
+    svd_path = kwargs.get('svd_path_{0}'.format(obsband.lower()), svd_path)
+
     for obj_exp, sky_exp, dit in matched_exposures:
         # sky_exp is either one SKY file (classic, from match_obj_sky) or a
         # list of (sky_file, weight, dt) from match_obj_skies (multi-sky)
