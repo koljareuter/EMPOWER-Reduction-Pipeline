@@ -1,3 +1,6 @@
+<img width="1620" height="325" alt="image" src="https://github.com/user-attachments/assets/b56cd8eb-4727-4362-957a-cd843cbbab1b" />
+
+
 # EMPOWER Reduction Pipeline
 
 Reduction pipeline for the KMOS IFU data of the EMPOWER programme. It takes raw KMOS frames
