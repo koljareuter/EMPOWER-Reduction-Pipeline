@@ -1,8 +1,8 @@
 # EMPOWER Reduction Pipeline
 
 Reduction pipeline for the KMOS IFU data of the EMPOWER programme. It takes raw KMOS frames
-to sky-subtracted, illumination-, background-, barycentric- and telluric-corrected data cubes,
-one OB at a time.
+to sky-subtracted, illumination-, background- and barycentric-corrected data cubes, one OB at a time,
+and corrects the combined cubes of every galaxy for telluric absorption, with a flux scale.
 
 It is based on [pySPARK](https://github.com/jtmendel/pyspark) by Trevor Mendel (MIT licence),
 extended for EMPOWER with:
@@ -12,7 +12,8 @@ extended for EMPOWER with:
   20 deg away, including a correction of the OH-line wings
 - a **mean-free ZAPv2 eigenbasis** for IZ and H (the bundled IZ basis had a mean offset about 1000x too large)
 - **telluric correction as a separate Python step** (tried putting the TELLURIC frame into the `kmos_sci_red`
-  SOF produced spatial gradients)
+  SOF produced spatial gradients), applied to the combined cubes with a frame-weighted transmission
+  (`scripts/telluric_combined.py`)
 
 
 The Python package keeps its original name, `pyspark`. It is unrelated to Apache PySpark;
@@ -71,13 +72,24 @@ python -c "import pyspark, pyspark.utils.interpolation, pyspark.calibration; pri
    ```bash
    python /path/to/EMPOWER-Reduction-Pipeline/scripts/reduce_kmos.py -p my.cfg
    ```
-4. Apply the telluric correction:
+   The final single frames are `procdir/<OB>/science/SCI_RECONSTRUCTED_*_s_i_bkg2d_rv.fits`.
+4. Combine all frames of every galaxy with the ESO EDPS workflow KMOS `cubes_combination` (`kmos_combine`,
+   `method=header`, `cmethod=ksigma`). Point EDPS only at the final frames, never at `procdir` itself (it would
+   also combine the `sky/` cubes and intermediate stages). Per band, link them into a clean input folder:
    ```bash
-   python /path/to/EMPOWER-Reduction-Pipeline/scripts/apply_telluric_only.py -p my.cfg
+   python scripts/make_edps_input.py IZ --procdir /path/to/kmos_proc --out /path/to/edps_in_IZ
    ```
-
-The final cubes are `procdir/<OB>/science/SCI_RECONSTRUCTED_*_s_i_bkg2d_rv_tell.fits`.
-`scripts/rerun_rv_tell.py` re-applies the barycentric and telluric corrections to OBs that are already reduced.
+   After the EDPS run, `scripts/edps_pick_jobs.py` checks that every job used only `_s_i_bkg2d_rv` frames and
+   copies the combined cubes (`--copy /path/to/res_IZ`).
+5. Telluric correction and flux scale of the combined cubes (method `best`, static files in `telluric_static/`):
+   ```bash
+   python scripts/telluric_combined.py index --frames /path/to/kmos_proc --out telluric_frame_index.json
+   python scripts/telluric_combined.py apply --comb /path/to/res_IZ --index telluric_frame_index.json \
+          --tell /path/to/kmos_raw --out /path/to/res_IZ_tell
+   ```
+   The transmission of a combined cube is the on-source-time-weighted mean of the archive `TELLURIC` spectra of
+   its frames, each shifted by the frame's barycentric velocity. Fluxes are `DATA × FLUXK`
+   (10⁻¹⁷ erg s⁻¹ cm⁻² Å⁻¹, header keyword `FLUXK`); `TELLEFF_*.fits` next to each cube holds the transmission.
 
 `examples/empower.cfg` reduces IZ, YJ and H in one run with the same EMPOWER settings for every band:
 row common-mode correction, linear OH wavelength correction, hybrid sky subtraction with the slitlet-position
@@ -130,8 +142,8 @@ The EMPOWER reduction used `flat_args = -cmethod=ksigma -badpix_thresh=35` in `[
 Everything else is the standard ESO software: pyspark calls the plain `esorex` on the `PATH` with the recipe
 options in its code, and parameters it doesn't set keep the KMOS 4.5.11 recipe defaults. The EMPOWER reduction
 ran without any esorex configuration files; esorex would read `~/.esorex/esorex.rc` or `~/.esorex/<recipe>.rc`
-if they exist, so make sure there are none. The final combination of the cubes (`kmos_combine` / EDPS) is not part
-of this repository.
+if they exist, so make sure there are none. The combination itself runs in the ESO EDPS workflow
+`cubes_combination`; this repository provides the scripts that prepare its input and check its jobs.
 
 ## Troubleshooting
 
