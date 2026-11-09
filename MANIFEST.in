@@ -1,0 +1,17 @@
+include pyspark/data/superdark_coeffs_mean.fits.fz
+include pyspark/data/superbad_60s.fits.fz
+include pyspark/data/ZAPv2_SVD_IZ_n500004.fits
+include pyspark/data/ZAPv2_SVD_IZ_n500004_nomean.fits
+include pyspark/data/ZAPv2_SVD_YJ_n500004.fits
+include pyspark/data/ZAPv2_SVD_H_n500004.fits
+include pyspark/data/ZAPv2_SVD_H_n500004_nomean.fits
+include pyspark/data/ZAPv2_SVD_K_n500004.fits
+include pyspark/data/ZAPv1_SVD_YJ_n500004.fits
+include pyspark/data/ZAPv1_SVD_H_n500004.fits
+include pyspark/data/ZAPv1_SVD_K_n500004.fits
+include pyspark/data/ZAPv2_SVD_YJ_n9504_e600.fits
+include pyspark/data/RESPONSE_IZIZIZ.fits
+include pyspark/data/RESPONSE_YJYJYJ.fits
+include pyspark/data/RESPONSE_HHH.fits
+include pyspark/data/RESPONSE_HKHKHK.fits
+include pyspark/data/RESPONSE_KKK.fits

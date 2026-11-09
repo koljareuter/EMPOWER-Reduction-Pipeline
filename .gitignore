@@ -1,0 +1,114 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Translations
+*.mo
+*.pot
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# pyenv
+.python-version
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+
+# misc files
+esorex.log
+*.log
+.logfile
+obj_sky_table.txt
+*.sof
+*.pdf
+
+# KMOS data directories (OB trees, processing output, archives)
+kmos_ob_*/
+kmos_*_proc/
+kmos_*_sorted*/
+kmos_proc_and_comb_server
+kmos_proc_server_comb
+
+
+*.tar.gz
+
+# local config variants
+scripts/kmos_local*.cfg
+scripts/reduce_kmos_local.py
+
+# data files that belong outside the repo
+scripts/*.fits
+scripts/*.csv
+!scripts/target_redshifts.csv
+telluric_check.ipynb
+!telluric_check.ipynb

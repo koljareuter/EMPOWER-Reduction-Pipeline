@@ -1,0 +1,9 @@
+numpy
+scipy
+astropy
+bottleneck
+scikit-learn
+matplotlib
+cython
+setuptools
+astroquery
