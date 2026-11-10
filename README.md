@@ -8,8 +8,8 @@ It is based on [pySPARK](https://github.com/jtmendel/pyspark) by Trevor Mendel (
 extended for EMPOWER with:
 
 - **row common-mode correction** of detectors 2 and 3 (lowers the noise of IFUs 9-24 by 5-8 %)
-- **hybrid sky subtraction** for OBJECT frames whose SKY frame was taken at a rotator angle more than
-  20 deg away, including a correction of the OH-line wings
+- **hybrid sky subtraction** for OBJECT frames whose SKY frame falls into another calibration bin (the DRP
+  takes the flat/LCAL of another of the six calibration rotator angles), including a correction of the OH-line wings
 - a **mean-free ZAPv2 eigenbasis** for IZ and H (the bundled IZ basis had a mean offset about 1000x too large)
 - **telluric correction as a separate Python step** (tried putting the TELLURIC frame into the `kmos_sci_red`
   SOF produced spatial gradients), applied to the combined cubes with a frame-weighted transmission

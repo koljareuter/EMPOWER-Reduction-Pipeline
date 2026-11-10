@@ -1,7 +1,9 @@
 """DRP detector-level sky subtraction for the hybrid sky subtraction (docs/hybrid-sky.md).
 
-For every OBJECT frame whose nearest SKY frame (the one subtract_sky uses: same DIT, closest DATE-OBS) was
-taken at a rotator angle more than hybrid_min_dangle away, kmos_sci_red is run with -no_subtract=FALSE
+For every OBJECT frame whose nearest SKY frame (the one subtract_sky uses: same DIT, closest DATE-OBS) falls
+into another calibration bin, i.e. kmos_sci_red takes MASTER_FLAT/LCAL of another calibration rotator angle
+(the nearest of the angles in the MASTER_FLAT, normally 0..300 deg in 60-deg steps) for the SKY frame than
+for the OBJECT frame, kmos_sci_red is run with -no_subtract=FALSE
 -sky_tweak=FALSE: the SKY frame is subtracted on the detector and reconstructed with the OBJECT's
 calibrations and OH wavelength correction. The cubes go to <OB>/skysub_det/ and are combined with the
 classic O - S by subtract_sky(hybrid_sky=True). The DRP's own object/sky pairing (obj_sky_table.txt) is
@@ -12,17 +14,22 @@ import glob
 import os
 import time
 
+import numpy as np
 from astropy.io import fits
 
 from ..utils.fileutils import patch_header, dateobsfmt
-from ..utils.obsutils import run_spark
+from ..utils.obsutils import run_spark, get_cal_rotator, match_obs_rotator
 from ..utils.setuputils import id_gen
 
-__all__ = ["skysub_det", "pair_frames", "read_obj_sky_table", "SKY_KEY", "DANGLE_KEY"]
+__all__ = ["skysub_det", "pair_frames", "read_obj_sky_table", "cal_angles", "cal_angle",
+           "SKY_KEY", "DANGLE_KEY", "OCAL_KEY", "SCAL_KEY"]
 
 ROT_KEY = 'HIERARCH ESO OCS ROT NAANGLE'
 SKY_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET SKY'
 DANGLE_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET DANGLE'
+OCAL_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET OCAL'
+SCAL_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET SCAL'
+DEFAULT_CAL_ANGLES = np.arange(0., 360., 60.)     # KMOS calibrations: six rotator angles 0..300 deg
 HDR_KEYS = ['DATE', 'DATE-OBS', 'OBJECT', 'RA', 'DEC', 'MJD-OBS', 'UTC', 'LST']
 
 
@@ -30,11 +37,29 @@ def _is_sky(hdr):
     return any(str(hdr.get('HIERARCH ESO OCS ARM{0} NAME'.format(i), '')).endswith('_SKY') for i in (1, 2, 3))
 
 
-def pair_frames(frames):
+def cal_angles(cal_lines):
+    """Calibration rotator angles of the MASTER_FLAT in cal_lines ('<file> <TAG>'); 0..300 deg if none found."""
+    for line in cal_lines:
+        fname, tag = line.rsplit(None, 1)
+        if tag == 'MASTER_FLAT' and os.path.isfile(fname):
+            with fits.open(fname) as fh:
+                rot = get_cal_rotator(fh)
+            if len(rot):
+                return np.asarray(rot, float)
+    return DEFAULT_CAL_ANGLES
+
+
+def cal_angle(rot, cal_rot):
+    """Calibration angle kmos_sci_red uses for a frame at rotator angle rot (the nearest one, wrapped)."""
+    return match_obs_rotator(None, np.asarray(cal_rot, float), input_rot=float(rot))[1]
+
+
+def pair_frames(frames, cal_rot=DEFAULT_CAL_ANGLES):
     """Nearest SKY frame of every OBJECT frame, as match_obj_sky does it (same DIT, closest DATE-OBS).
 
-    Returns ({object frame: (sky frame, |rotator angle difference| in deg)}, [all SKY frames]); OBJECT
-    frames without a SKY frame of the same DIT are left out.
+    Returns ({object frame: (sky frame, |rotator angle difference| in deg, calibration angle of the
+    OBJECT frame, calibration angle of the SKY frame)}, [all SKY frames]); OBJECT frames without a SKY
+    frame of the same DIT are left out.
     """
     info = {}
     for f in frames:
@@ -50,7 +75,8 @@ def pair_frames(frames):
         if not cand:
             continue
         s = min(cand, key=lambda f: abs(info[f][1] - info[o][1]))
-        pairs[o] = (s, abs((info[s][3] - info[o][3] + 540.) % 360. - 180.))
+        pairs[o] = (s, abs((info[s][3] - info[o][3] + 540.) % 360. - 180.),
+                    cal_angle(info[o][3], cal_rot), cal_angle(info[s][3], cal_rot))
     return pairs, skies
 
 
@@ -71,17 +97,18 @@ def read_obj_sky_table(path):
     return out
 
 
-def skysub_det(frames, cal_lines, outputdir, subdir, min_dangle=20., esorex_opts='', env=None, logger=None):
-    """Write skysub_det/SCI_RECONSTRUCTED_<frame> for the OBJECT frames with a rotator mismatch.
+def skysub_det(frames, cal_lines, outputdir, subdir, esorex_opts='', env=None, logger=None):
+    """Write skysub_det/SCI_RECONSTRUCTED_<frame> for the OBJECT frames whose SKY frame falls into another
+    calibration bin (another calibration rotator angle) than the OBJECT frame.
 
     frames    : the original science frames of this OB and band (not angle-edited SKY copies)
     cal_lines : the calibration lines of the reconstruction SOF ('<file> <TAG>')
     Returns the number of cubes written, or -1 if kmos_sci_red failed.
     """
-    min_dangle = float(min_dangle)
     det_dir = os.path.abspath(os.path.join(outputdir, subdir, 'skysub_det'))     # the run below changes the cwd
-    pairs, skies = pair_frames(frames)
-    use = dict((o, p) for o, p in pairs.items() if p[1] > min_dangle)
+    cal_rot = cal_angles(cal_lines)
+    pairs, skies = pair_frames(frames, cal_rot)
+    use = dict((o, p) for o, p in pairs.items() if p[2] != p[3])
 
     #cubes left over from an earlier run with other frames/settings would be picked up by subtract_sky
     for o in pairs:
@@ -89,8 +116,9 @@ def skysub_det(frames, cal_lines, outputdir, subdir, min_dangle=20., esorex_opts
         if os.path.isfile(old):
             os.remove(old)
     if logger is not None:
-        logger.info('-- Hybrid sky: {0} of {1} OBJECT frames have their SKY frame > {2:g} deg away'.format(
-            len(use), len(pairs), min_dangle))
+        logger.info('-- Hybrid sky: {0} of {1} OBJECT frames have their SKY frame in another calibration bin '
+                    '(calibration angles {2} deg)'.format(len(use), len(pairs),
+                                                          ', '.join('{0:g}'.format(a) for a in cal_rot)))
     if not use:
         return 0
 
@@ -123,7 +151,7 @@ def skysub_det(frames, cal_lines, outputdir, subdir, min_dangle=20., esorex_opts
     tables = glob.glob(os.path.join(work, 'obj_sky_table*.txt'))
     drp_pairs = read_obj_sky_table(tables[0]) if tables else {}
     nwritten = 0
-    for o, (s, dangle) in sorted(use.items()):
+    for o, (s, dangle, ocal, scal) in sorted(use.items()):
         cube = os.path.join(work, 'SCI_RECONSTRUCTED_{0}'.format(os.path.basename(o)))
         drp_sky = drp_pairs.get(os.path.basename(o))
         if not os.path.isfile(cube) or drp_sky != {os.path.basename(s)}:
@@ -135,11 +163,13 @@ def skysub_det(frames, cal_lines, outputdir, subdir, min_dangle=20., esorex_opts
         with fits.open(cube, mode='update') as fh:
             fh[0].header[SKY_KEY] = (os.path.basename(s), 'SKY frame subtracted on the detector')
             fh[0].header[DANGLE_KEY] = (round(dangle, 2), '[deg] rotator angle SKY - OBJECT')
+            fh[0].header[OCAL_KEY] = (ocal, '[deg] calibration angle of the OBJECT frame')
+            fh[0].header[SCAL_KEY] = (scal, '[deg] calibration angle of the SKY frame')
         os.replace(cube, os.path.join(det_dir, os.path.basename(cube)))
         nwritten += 1
         if logger is not None:
-            logger.info('--- {0} - {1} (rotator {2:.1f} deg apart) -> skysub_det/'.format(
-                os.path.basename(o), os.path.basename(s), dangle))
+            logger.info('--- {0} - {1} (rotator {2:.1f} deg apart, calibration {3} vs {4} deg) -> skysub_det/'
+                        .format(os.path.basename(o), os.path.basename(s), dangle, ocal, scal))
 
     _clear(work)
     return nwritten

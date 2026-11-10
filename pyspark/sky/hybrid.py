@@ -93,7 +93,8 @@ def _along(sub, oh_model):
     raise ValueError("unknown oh_model %r" % oh_model)
 
 
-def hybrid_ifu(ocube, scube, rds, ifu, lam, wing=0, oh_model="median", free_model="tmpl", edge=0):
+def hybrid_ifu(ocube, scube, rds, ifu, lam, wing=0, oh_model="median", free_model="tmpl", edge=0,
+               oh_highpass=False):
     """Hybrid sky-subtracted cube of one IFU.
 
     ocube, scube : un-subtracted OBJECT and nearest SKY cubes (pyspark sky/ reconstructions)
@@ -122,6 +123,12 @@ def hybrid_ifu(ocube, scube, rds, ifu, lam, wing=0, oh_model="median", free_mode
                    slitlet median, smoothed along wavelength (101-plane running median without the OH-core planes).
                    Without it the model is flat along the slitlet there and the result keeps the slitlet-end level
                    of the detector-level cube (hot edge rows in the combined cubes, docs/hybrid-sky.md 'Slitlet ends').
+    oh_highpass  : False = as before.  True: in the OH-core planes use the slitlet median of D minus its 101-plane
+                   running median (for free_model 'ifumed': of its deviation from the IFU median), i.e. the same
+                   high-passed slitlet level as the template fit outside the cores.  Without it a broad slitlet
+                   offset of D (e.g. +1 to +3 ADU/s in the outermost slitlet of IFU 24 at 0.95-1.0 um, where the
+                   SKY cube reconstructed at its own angle loses light) is put back in the OH-core planes only, so
+                   the result jumps between the two levels from plane to plane ('blocks' in the combined cubes).
     Returns a float64 cube; NaN where rds is NaN.
     """
     oc = np.asarray(ocube, float)
@@ -221,12 +228,19 @@ def hybrid_ifu(ocube, scube, rds, ifu, lam, wing=0, oh_model="median", free_mode
         if ok.sum() < 200:
             continue
         coef = np.linalg.lstsq(T[ok], dmed[ok], rcond=None)[0]
+        slmed = np.nanmedian(sub, axis=1)
+        if not oh_highpass:
+            ohval = np.nan_to_num(slmed)
+        elif ifu_full is None:
+            ohval = np.nan_to_num(highpass(slmed))
+        else:
+            ohval = ifu_full + np.nan_to_num(highpass(slmed - ifu_full))
         if ifu_full is None:
-            m = np.where(oh, np.nan_to_num(np.nanmedian(sub, axis=1)), T @ coef)
+            m = np.where(oh, ohval, T @ coef)
             if wings is not None:
                 m = np.where(wings, ifu_med, m)
         else:
-            m = np.where(oh, np.nan_to_num(np.nanmedian(sub, axis=1)), ifu_full + T @ coef)
+            m = np.where(oh, ohval, ifu_full + T @ coef)
             if wings is not None:
                 m = np.where(wings, ifu_full, m)
         if oh_model == "median":

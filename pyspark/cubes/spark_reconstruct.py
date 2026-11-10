@@ -17,7 +17,7 @@ static_cal = os.environ['KMOS_CALIB']
 def reconstruct(logger=None, subdir=None, obsband=None, sky_method='spark',
                 combine=False, reconstruct_cubes=True, use_oh=True,
                 telluric_in_sof=False, recipe_dir=None, lcorr_degree=None, sky_cal_angle='own',
-                hybrid_sky=False, hybrid_min_dangle=20., hybrid_bands='IZ', sky_align=False,
+                hybrid_sky=False, hybrid_bands='IZ', sky_align=False,
                 sky_align_dx='measure', **kwargs):
 
     """ Reconstruct science cubes using spark
@@ -37,8 +37,9 @@ def reconstruct(logger=None, subdir=None, obsband=None, sky_method='spark',
                       flat-edge model as prior and fallback, or the flat-edge model alone (sky_align.py)
     and for the hybrid sky subtraction (docs/hybrid-sky.md):
       hybrid_sky         True: also write the DRP detector-level sky-subtracted cube of every OBJECT
-                         frame whose nearest SKY frame is more than hybrid_min_dangle (deg, default 20)
-                         away in rotator angle to <OB>/skysub_det/ (used by subtract_sky)
+                         frame whose nearest SKY frame falls into another calibration bin (nearest
+                         calibration rotator angle of the MASTER_FLAT) to <OB>/skysub_det/ (used by
+                         subtract_sky); the old hybrid_min_dangle setting is ignored
       hybrid_bands       bands the hybrid is used for (default IZ; validated only there, H gets worse)
     """
 
@@ -188,7 +189,7 @@ def reconstruct(logger=None, subdir=None, obsband=None, sky_method='spark',
         with open(outfile) as fh:
             cal_lines = [line.strip() for line in fh if line.strip() and not line.strip().endswith(' SCIENCE')]
         skysub_det([frame for frame, _ in frames], cal_lines, kwargs['outputdir'], subdir,
-                   min_dangle=hybrid_min_dangle, esorex_opts=esorex_opts, env=lcorr_env, logger=logger)
+                   esorex_opts=esorex_opts, env=lcorr_env, logger=logger)
 
     #move the .sof file for logging
     clean_move(outfile, os.path.join(kwargs['outputdir'], subdir, 'sof', '{0}_cubes_{1}.sof'\

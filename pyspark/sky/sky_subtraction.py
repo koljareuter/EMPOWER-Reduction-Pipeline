@@ -199,12 +199,14 @@ def salva(cube, filename):
 def zap_sky_v2(matched_exposures, logger=None, obsband=None, subdir=None,
             inputdir=None, suffix='s', tbsub=False, svd_path=None,
             sky_combine='nearest', sky_scale='none', sky_nan='renorm', hybrid_sky=False,
-            hybrid_min_dangle=20., hybrid_wing=0, hybrid_oh_model='median', hybrid_free_model='tmpl', hybrid_edge=0,
-            sky_align=False, **kwargs):
+            hybrid_wing=0, hybrid_oh_model='median', hybrid_free_model='tmpl', hybrid_edge=0,
+            hybrid_oh_highpass=False, sky_align=False, **kwargs):
 
     # per-band eigenbasis (svd_path_<band>, e.g. svd_path_iz) takes precedence over svd_path,
     # so one run over several bands can use a different basis for each
     svd_path = kwargs.get('svd_path_{0}'.format(obsband.lower()), svd_path)
+    # [cubes] hybrid_oh_highpass: high-passed OH-core term of the hybrid model (pyspark/sky/hybrid.py)
+    oh_highpass = str(hybrid_oh_highpass).strip().lower() in ('true', '1', 'yes')
 
     for obj_exp, sky_exp, dit in matched_exposures:
         # sky_exp is either one SKY file (classic, from match_obj_sky) or a
@@ -222,8 +224,8 @@ def zap_sky_v2(matched_exposures, logger=None, obsband=None, subdir=None,
         use_hyb = bool(hybrid_sky) and not multi and os.path.isfile(hyb_path)
         if use_hyb:
             # the detector-level cube must belong to this O - S: same SKY frame, made after the sky/ OBJECT
-            # cube (a later reconstruction without hybrid_sky leaves old cubes behind), rotator offset above
-            # the threshold
+            # cube (a later reconstruction without hybrid_sky leaves old cubes behind), OBJECT and SKY in
+            # different calibration bins (cubes of the old > 20 deg rule do not record the bins)
             dh = fits.getheader(hyb_path)
             det_sky = dh.get('HIERARCH ESO PYSPARK SKYSUB DET SKY')
             why = None
@@ -231,8 +233,11 @@ def zap_sky_v2(matched_exposures, logger=None, obsband=None, subdir=None,
                 why = 'was made with SKY {0}, not {1}'.format(det_sky, os.path.basename(sky_exp))
             elif os.path.getmtime(hyb_path) < os.path.getmtime(obj_exp):
                 why = 'is older than sky/{0}'.format(os.path.basename(obj_exp))
-            elif float(dh.get('HIERARCH ESO PYSPARK SKYSUB DET DANGLE', 0.)) <= float(hybrid_min_dangle):
-                why = 'has a rotator offset <= hybrid_min_dangle'
+            elif dh.get('HIERARCH ESO PYSPARK SKYSUB DET OCAL') is None or \
+                    dh.get('HIERARCH ESO PYSPARK SKYSUB DET SCAL') is None:
+                why = 'records no calibration bins (made with the old rotator-offset rule)'
+            elif float(dh['HIERARCH ESO PYSPARK SKYSUB DET OCAL']) == float(dh['HIERARCH ESO PYSPARK SKYSUB DET SCAL']):
+                why = 'has OBJECT and SKY in the same calibration bin'
             if why is not None:
                 if logger is not None:
                     logger.warning('-- skysub_det/{0} {1}: classic O - S'.format(os.path.basename(hyb_path), why))
@@ -298,9 +303,10 @@ def zap_sky_v2(matched_exposures, logger=None, obsband=None, subdir=None,
             else:
                 logger.debug('-- Using {0} for initial subtraction'.format(sky_exp.split('/')[-1]))
             if use_hyb:
-                logger.info('-- Hybrid sky subtraction with skysub_det/{0} (wing {1}, oh {2}, free {3}{4})'.format(
+                logger.info('-- Hybrid sky subtraction with skysub_det/{0} (wing {1}, oh {2}, free {3}{4}{5})'.format(
                     os.path.basename(hyb_path), int(hybrid_wing), str(hybrid_oh_model).strip(),
-                    str(hybrid_free_model).strip(), ', edge {0}'.format(int(hybrid_edge)) if int(hybrid_edge) else ''))
+                    str(hybrid_free_model).strip(), ', edge {0}'.format(int(hybrid_edge)) if int(hybrid_edge) else '',
+                    ', oh highpass' if oh_highpass else ''))
         with fits.open(exp_sub, mode='update') as ofile, contextlib.ExitStack() as sstack:
             sfiles = [sstack.enter_context(fits.open(sf)) for sf in sky_files]
             rfile = sstack.enter_context(fits.open(hyb_path)) if use_hyb else None
@@ -354,7 +360,8 @@ def zap_sky_v2(matched_exposures, logger=None, obsband=None, subdir=None,
                         lam = (np.arange(oz) + 1 - header['CRPIX3']) * header['CDELT3'] + header['CRVAL3']
                         sub_cube = hybrid_ifu(ocube, scube, np.array(rfile[ifu].data), ifu, lam,
                                               wing=int(hybrid_wing), oh_model=str(hybrid_oh_model).strip(),
-                                              free_model=str(hybrid_free_model).strip(), edge=int(hybrid_edge))
+                                              free_model=str(hybrid_free_model).strip(), edge=int(hybrid_edge),
+                                              oh_highpass=oh_highpass)
                         sub_cube = sub_cube.astype(np.float32).astype(float)
                     else:
                         if use_hyb and logger is not None:
@@ -407,6 +414,8 @@ def zap_sky_v2(matched_exposures, logger=None, obsband=None, subdir=None,
                 if int(hybrid_edge):
                     ofile[0].header['HIERARCH ESO PYSPARK SKY HYBRID EDGE'] = (int(hybrid_edge),
                                                                                'slitlet-end level of D, N positions')
+                if oh_highpass:
+                    ofile[0].header['HIERARCH ESO PYSPARK SKY HYBRID OHHP'] = (True, 'OH-core term of D high-passed')
                 ofile[0].header['HISTORY'] = 'Sky: hybrid (DRP detector-level O-S + slitlet model of the sky-only term)'
 
 
