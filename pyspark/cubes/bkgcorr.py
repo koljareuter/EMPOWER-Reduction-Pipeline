@@ -4,6 +4,7 @@ import numpy as np
 import bottleneck as bn
 
 from astropy.io import fits
+from scipy.ndimage import median_filter, uniform_filter1d
 
 from ..utils.fileutils import (get_obs_exposures, duplicate)
 from ..utils.obsutils import (hsm, find_lines, reconstruct_wave, band_limits,
@@ -14,14 +15,73 @@ from ..utils.psfutils import fit_psf
 import matplotlib.pyplot as pl
 
 
-__all__ = ["bkg_correct_2d", "bkg_correct_spec"]
+__all__ = ["bkg_correct_2d", "bkg_correct_spec", "plane_offsets"]
+
+PLANE_MIN_SPX = 30          # planes with fewer valid empty spaxels are not corrected
+
+
+def plane_offsets(cube, rmask=4., hp=31, peak_sigma=5., shrink=101):
+    """Per-plane residual-sky offset of one IFU (the 'bkg_plane' step of bkg_correct_2d).
+
+    Per wavelength plane the median of the empty spaxels: not on the outer spaxel ring (biased edge rows),
+    not within rmask spaxels of the IFU centre (where the arm puts the target), and not within rmask spaxels
+    of the continuum peak if that is detected at > peak_sigma. Only the part that varies from plane to plane
+    is returned (the offset minus its running median over hp planes), so a smooth continuum, e.g. the outskirts
+    of an extended galaxy, is left alone; the smooth level is bkg_correct_2d's single value.
+    shrink > 1: every offset is scaled by the Wiener factor max(0, 1 - n2 / m2), with n2 the variance of the median
+    from the spaxel scatter of that plane (1.2533**2 sigma**2 / N) and m2 the mean square offset over shrink planes
+    around it. Where the IFU has no common residual (m2 ~ n2) nothing is subtracted, so the step does not add the
+    noise of its own estimate to every spaxel; where the residual is large (m2 >> n2) it is removed fully.
+    Returns (offsets [nz], number of empty spaxels).
+    """
+    nz, ny, nx = cube.shape
+    yy, xx = np.mgrid[:ny, :nx]
+    est = (yy > 0) & (yy < ny - 1) & (xx > 0) & (xx < nx - 1)
+    est &= np.hypot(yy - (ny - 1) / 2., xx - (nx - 1) / 2.) > rmask
+    img = bn.nanmedian(cube, axis=0)
+    good = np.isfinite(img) & (yy > 1) & (yy < ny - 2) & (xx > 1) & (xx < nx - 2)
+    if good.sum() > 10:
+        vals = img[good]
+        med = np.median(vals)
+        sig = 1.4826 * np.median(np.abs(vals - med))
+        k = np.argmax(np.where(good, img, -np.inf))
+        py, px = np.unravel_index(k, img.shape)
+        if sig > 0 and img[py, px] - med > peak_sigma * sig:
+            est &= np.hypot(yy - py, xx - px) > rmask
+    flat = cube[:, est]
+    nval = np.isfinite(flat).sum(axis=1)
+    off = bn.nanmedian(flat, axis=1)
+    off[(nval < PLANE_MIN_SPX) | ~np.isfinite(off)] = np.nan
+    if hp and int(hp) > 1:
+        fill = np.where(np.isfinite(off), off, bn.nanmedian(off) if np.isfinite(off).any() else 0.)
+        off = off - median_filter(fill, size=int(hp), mode='nearest')
+    off = np.nan_to_num(off)
+    if shrink and int(shrink) > 1:
+        sig = 1.4826 * bn.nanmedian(np.abs(flat - bn.nanmedian(flat, axis=1)[:, np.newaxis]), axis=1)
+        n2 = np.where(nval >= PLANE_MIN_SPX, (1.2533 * np.nan_to_num(sig)) ** 2 / np.maximum(nval, 1), 0.)
+        m2 = uniform_filter1d(off ** 2, size=int(shrink), mode='nearest')
+        n2s = uniform_filter1d(n2, size=int(shrink), mode='nearest')
+        w = np.clip(1. - n2s / np.where(m2 > 0, m2, np.inf), 0., 1.)
+        off = off * w
+    return off, int(est.sum())
 
 
 def bkg_correct_2d(logger=None, subdir=None, obsband=None, 
-               search_suffix=None, bkg_corr=True, **kwargs):
+               search_suffix=None, bkg_corr=True, bkg_plane=False, bkg_plane_rmask=4.,
+               bkg_plane_hp=31, bkg_plane_shrink=101, **kwargs):
+    """Background correction of the sky-subtracted, illumination-corrected frames (suffix bkg2d): one modal
+    level per IFU from the collapsed image (DRP-like), and with [cubes] bkg_plane = True in addition the
+    per-plane residual-sky offset of the empty spaxels (plane_offsets; bkg_plane_rmask: object mask radius in
+    spaxels around the IFU centre and a detected continuum peak, default 4; bkg_plane_hp: planes of the running
+    median whose part is kept, default 31; bkg_plane_shrink: planes of the Wiener factor, default 101, 0 = off).
+    The per-plane offset is the sky residual common to the whole IFU
+    that the 3x3-aperture noise of the hybrid frames is dominated by (docs/hybrid-sky.md); it does not depend on
+    the object, which is masked.
+    """
 
     if not bkg_corr:
         return 0
+    bkg_plane = str(bkg_plane).strip().lower() in ('true', '1', 'yes')
     
     if logger is not None:
         logger.debug('- Running background correction')
@@ -82,12 +142,32 @@ def bkg_correct_2d(logger=None, subdir=None, obsband=None,
                     mode_bkg = hsm(bkg_image[1:-1,1:-1])
 
                     #re-apply to 
-                    ofile[ifu].data = np.copy(cube)-mode_bkg
+                    corr = np.copy(cube) - mode_bkg
+
+                    #per-plane residual-sky offset of the empty spaxels (optional)
+                    if bkg_plane:
+                        off, nest = plane_offsets(corr, rmask=float(bkg_plane_rmask), hp=int(bkg_plane_hp),
+                                                  shrink=int(bkg_plane_shrink))
+                        corr = corr - off[:, np.newaxis, np.newaxis]
+                        ofile[ifu].header['HIERARCH ESO PYSPARK BKG PLANE NSPX'] = (nest, 'empty spaxels per plane')
+                        ofile[ifu].header['HIERARCH ESO PYSPARK BKG PLANE RMS'] = (
+                            float(np.round(np.std(off), 5)), 'rms of the per-plane offsets')
+                        if logger is not None:
+                            logger.debug('-- IFU {0}: per-plane offsets from {1} spaxels, rms {2:.4f}'.format(
+                                ifu, nest, np.std(off)))
+
+                    ofile[ifu].data = corr
 
                     if logger is not None:
                         logger.debug('-- Applied background correction to IFU {0}: {1}'.format(ifu, mode_bkg))
             
                 ofile[ifu].header['HISTORY'] = "Applied background correction: {0:.3f}".format(mode_bkg)
+            if bkg_plane:
+                ofile[0].header['HIERARCH ESO PYSPARK BKG PLANE'] = (True, 'per-plane residual-sky offset removed')
+                ofile[0].header['HIERARCH ESO PYSPARK BKG PLANE RMASK'] = (float(bkg_plane_rmask),
+                                                                           '[spx] object mask radius')
+                ofile[0].header['HIERARCH ESO PYSPARK BKG PLANE HP'] = (int(bkg_plane_hp), 'running-median planes')
+                ofile[0].header['HIERARCH ESO PYSPARK BKG PLANE SHRINK'] = (int(bkg_plane_shrink), 'Wiener-factor planes')
            
 
     return 0

@@ -1,9 +1,10 @@
 """DRP detector-level sky subtraction for the hybrid sky subtraction (docs/hybrid-sky.md).
 
-For every OBJECT frame whose nearest SKY frame (the one subtract_sky uses: same DIT, closest DATE-OBS) falls
-into another calibration bin, i.e. kmos_sci_red takes MASTER_FLAT/LCAL of another calibration rotator angle
-(the nearest of the angles in the MASTER_FLAT, normally 0..300 deg in 60-deg steps) for the SKY frame than
-for the OBJECT frame, kmos_sci_red is run with -no_subtract=FALSE
+For the OBJECT frames selected by hybrid_rule (select_pairs): all of them; or those whose nearest SKY frame
+(the one subtract_sky uses: same DIT, closest DATE-OBS) falls into another calibration bin, i.e. kmos_sci_red
+takes MASTER_FLAT/LCAL of another calibration rotator angle (the nearest of the angles in the MASTER_FLAT,
+normally 0..300 deg in 60-deg steps); or those more than hybrid_min_dangle deg away in rotator angle -
+kmos_sci_red is run with -no_subtract=FALSE
 -sky_tweak=FALSE: the SKY frame is subtracted on the detector and reconstructed with the OBJECT's
 calibrations and OH wavelength correction. The cubes go to <OB>/skysub_det/ and are combined with the
 classic O - S by subtract_sky(hybrid_sky=True). The DRP's own object/sky pairing (obj_sky_table.txt) is
@@ -22,13 +23,15 @@ from ..utils.obsutils import run_spark, get_cal_rotator, match_obs_rotator
 from ..utils.setuputils import id_gen
 
 __all__ = ["skysub_det", "pair_frames", "read_obj_sky_table", "cal_angles", "cal_angle",
-           "SKY_KEY", "DANGLE_KEY", "OCAL_KEY", "SCAL_KEY"]
+           "select_pairs", "HYBRID_RULES", "SKY_KEY", "DANGLE_KEY", "OCAL_KEY", "SCAL_KEY", "RULE_KEY"]
 
 ROT_KEY = 'HIERARCH ESO OCS ROT NAANGLE'
 SKY_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET SKY'
 DANGLE_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET DANGLE'
 OCAL_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET OCAL'
 SCAL_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET SCAL'
+RULE_KEY = 'HIERARCH ESO PYSPARK SKYSUB DET RULE'
+HYBRID_RULES = ('all', 'bins', 'angle')
 DEFAULT_CAL_ANGLES = np.arange(0., 360., 60.)     # KMOS calibrations: six rotator angles 0..300 deg
 HDR_KEYS = ['DATE', 'DATE-OBS', 'OBJECT', 'RA', 'DEC', 'MJD-OBS', 'UTC', 'LST']
 
@@ -97,9 +100,31 @@ def read_obj_sky_table(path):
     return out
 
 
-def skysub_det(frames, cal_lines, outputdir, subdir, esorex_opts='', env=None, logger=None):
-    """Write skysub_det/SCI_RECONSTRUCTED_<frame> for the OBJECT frames whose SKY frame falls into another
-    calibration bin (another calibration rotator angle) than the OBJECT frame.
+def select_pairs(pairs, rule='bins', min_dangle=20.):
+    """OBJECT frames of pair_frames() that get the detector-level O - S.
+
+    rule  all    every OBJECT frame with a SKY frame. The detector-level O - S cancels the detector features
+                 (hot pixels, flat and slitlet edges) for any difference between the pixel -> wavelength maps
+                 of OBJECT and SKY frame, calibration bin and the frame's own OH shift (flexure) alike
+                 (docs/hybrid-sky.md, 'Which frames'). The classic O - S does not, already within one bin.
+          bins   OBJECT and SKY frame in different calibration bins (the rule of the clean run 2026-11)
+          angle  rotator angles more than min_dangle deg apart (the rule up to 2026-10, 20 deg)
+    """
+    rule = str(rule).strip().lower()
+    if rule not in HYBRID_RULES:
+        raise ValueError('hybrid_rule must be one of {0}, got {1!r}'.format(HYBRID_RULES, rule))
+    if rule == 'all':
+        return dict(pairs)
+    if rule == 'bins':
+        return dict((o, p) for o, p in pairs.items() if p[2] != p[3])
+    return dict((o, p) for o, p in pairs.items() if p[1] > float(min_dangle))
+
+
+def skysub_det(frames, cal_lines, outputdir, subdir, esorex_opts='', env=None, logger=None,
+               rule='bins', min_dangle=20.):
+    """Write skysub_det/SCI_RECONSTRUCTED_<frame> for the OBJECT frames selected by select_pairs(rule):
+    every OBJECT frame (all), those whose SKY frame falls into another calibration bin (bins), or those whose
+    SKY frame is more than min_dangle deg away in rotator angle (angle).
 
     frames    : the original science frames of this OB and band (not angle-edited SKY copies)
     cal_lines : the calibration lines of the reconstruction SOF ('<file> <TAG>')
@@ -108,7 +133,8 @@ def skysub_det(frames, cal_lines, outputdir, subdir, esorex_opts='', env=None, l
     det_dir = os.path.abspath(os.path.join(outputdir, subdir, 'skysub_det'))     # the run below changes the cwd
     cal_rot = cal_angles(cal_lines)
     pairs, skies = pair_frames(frames, cal_rot)
-    use = dict((o, p) for o, p in pairs.items() if p[2] != p[3])
+    rule = str(rule).strip().lower()
+    use = select_pairs(pairs, rule, min_dangle)
 
     #cubes left over from an earlier run with other frames/settings would be picked up by subtract_sky
     for o in pairs:
@@ -116,9 +142,11 @@ def skysub_det(frames, cal_lines, outputdir, subdir, esorex_opts='', env=None, l
         if os.path.isfile(old):
             os.remove(old)
     if logger is not None:
-        logger.info('-- Hybrid sky: {0} of {1} OBJECT frames have their SKY frame in another calibration bin '
-                    '(calibration angles {2} deg)'.format(len(use), len(pairs),
-                                                          ', '.join('{0:g}'.format(a) for a in cal_rot)))
+        nbin = sum(1 for p in pairs.values() if p[2] != p[3])
+        logger.info('-- Hybrid sky, rule {0}{1}: detector-level O - S for {2} of {3} OBJECT frames ({4} with the SKY '
+                    'frame in another calibration bin; calibration angles {5} deg)'.format(
+                        rule, ' > {0:g} deg'.format(float(min_dangle)) if rule == 'angle' else '', len(use),
+                        len(pairs), nbin, ', '.join('{0:g}'.format(a) for a in cal_rot)))
     if not use:
         return 0
 
@@ -165,6 +193,7 @@ def skysub_det(frames, cal_lines, outputdir, subdir, esorex_opts='', env=None, l
             fh[0].header[DANGLE_KEY] = (round(dangle, 2), '[deg] rotator angle SKY - OBJECT')
             fh[0].header[OCAL_KEY] = (ocal, '[deg] calibration angle of the OBJECT frame')
             fh[0].header[SCAL_KEY] = (scal, '[deg] calibration angle of the SKY frame')
+            fh[0].header[RULE_KEY] = (rule, 'hybrid_rule that selected this frame')
         os.replace(cube, os.path.join(det_dir, os.path.basename(cube)))
         nwritten += 1
         if logger is not None:

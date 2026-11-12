@@ -17,7 +17,8 @@ static_cal = os.environ['KMOS_CALIB']
 def reconstruct(logger=None, subdir=None, obsband=None, sky_method='spark',
                 combine=False, reconstruct_cubes=True, use_oh=True,
                 telluric_in_sof=False, recipe_dir=None, lcorr_degree=None, sky_cal_angle='own',
-                hybrid_sky=False, hybrid_bands='IZ', sky_align=False,
+                hybrid_sky=False, hybrid_bands='IZ', hybrid_rule='bins', hybrid_min_dangle=20.,
+                sky_align=False,
                 sky_align_dx='measure', **kwargs):
 
     """ Reconstruct science cubes using spark
@@ -36,10 +37,13 @@ def reconstruct(logger=None, subdir=None, obsband=None, sky_method='spark',
       sky_align_dx    measure (default) | flat: per-IFU offsets from the frames' OH lines with the
                       flat-edge model as prior and fallback, or the flat-edge model alone (sky_align.py)
     and for the hybrid sky subtraction (docs/hybrid-sky.md):
-      hybrid_sky         True: also write the DRP detector-level sky-subtracted cube of every OBJECT
-                         frame whose nearest SKY frame falls into another calibration bin (nearest
-                         calibration rotator angle of the MASTER_FLAT) to <OB>/skysub_det/ (used by
-                         subtract_sky); the old hybrid_min_dangle setting is ignored
+      hybrid_sky         True: also write the DRP detector-level sky-subtracted cube of the OBJECT
+                         frames selected by hybrid_rule to <OB>/skysub_det/ (used by subtract_sky)
+      hybrid_rule        all: every OBJECT frame (the detector-level O - S cancels the detector features
+                         for any calibration and flexure difference of OBJECT and SKY frame);
+                         bins (default, the clean run 2026-11): SKY frame in another calibration bin
+                         (nearest calibration rotator angle of the MASTER_FLAT); angle: rotator angles
+                         more than hybrid_min_dangle (default 20) deg apart (skysub_det.select_pairs)
       hybrid_bands       bands the hybrid is used for (default IZ; validated only there, H gets worse)
     """
 
@@ -181,7 +185,7 @@ def reconstruct(logger=None, subdir=None, obsband=None, sky_method='spark',
         if nal < 0:
             return 1
 
-    #hybrid sky subtraction: detector-level O - S for the OBJECT frames with a rotator mismatch,
+    #hybrid sky subtraction: detector-level O - S for the OBJECT frames selected by hybrid_rule,
     #same calibrations, OH_SPEC, recipe and lcorr degree as above
     hybrid_band = obsband.upper() in [b.strip().upper() for b in str(hybrid_bands).split(',')]
     if hybrid_sky and sky_method not in ('spark', 'edps') and hybrid_band:
@@ -189,7 +193,8 @@ def reconstruct(logger=None, subdir=None, obsband=None, sky_method='spark',
         with open(outfile) as fh:
             cal_lines = [line.strip() for line in fh if line.strip() and not line.strip().endswith(' SCIENCE')]
         skysub_det([frame for frame, _ in frames], cal_lines, kwargs['outputdir'], subdir,
-                   esorex_opts=esorex_opts, env=lcorr_env, logger=logger)
+                   esorex_opts=esorex_opts, env=lcorr_env, logger=logger,
+                   rule=hybrid_rule, min_dangle=float(hybrid_min_dangle))
 
     #move the .sof file for logging
     clean_move(outfile, os.path.join(kwargs['outputdir'], subdir, 'sof', '{0}_cubes_{1}.sof'\
