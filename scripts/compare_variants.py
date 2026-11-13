@@ -6,8 +6,12 @@ the planes between OH lines and on OH lines (from the median sky spectrum of the
   spx    per-spaxel noise (interior spaxels)
   box    3x3-aperture noise (four boxes around the IFU centre, where the targets are; robust over planes)
   cm     per-plane IFU-wide offset / spx (0.1 ~ noise only for ~100 spaxels)
-  kept   signal kept in the central r = 2.8 spx aperture: slope of variant vs reference over the planes
-         where the reference aperture spectrum is > 4 sigma (emission lines, continuum features); 1 = unchanged
+  kept   line signal kept in the central r = 2.8 spx aperture: sum(variant) / sum(reference) over the OH-free
+         planes where the MEAN of both aperture spectra is > 5 sigma (selected on both runs, so noise spikes and
+         sky residuals of one run do not bias it; a fit against the reference alone is biased low whenever the
+         variant has less noise); 1 = unchanged
+  cont   continuum kept: sum(variant) / sum(reference) of the aperture flux (not high-passed) over all OH-free
+         planes, for IFUs whose reference continuum is > 10 sigma
 Printed: median over the IFUs with data of spx, box (variant / reference), cm, kept.
 
     python scripts/compare_variants.py --band IZ --ref /local_storage/KOLJA/PROCDIR_CLEAN \
@@ -103,8 +107,7 @@ for ob in a.obs:
             h[~np.isfinite(d)] = np.nan
             hp[name] = h
         a0 = np.nansum(hp['ref'][:, ap], axis=1)
-        sig0 = rmad(a0[free])
-        strong = ok & (a0 > 4 * sig0)
+        c0 = np.nansum(d0[:, ap], axis=1)
         for name in hp:
             h = hp[name]
             inner = h[:, 2:-2, 2:-2]
@@ -123,19 +126,27 @@ for ob in a.obs:
                 r['box_' + mn] = rmad(box[:, m].ravel())
                 r['cm_' + mn] = rmad(cm[m]) / s
             av = np.nansum(h[:, ap], axis=1)
-            r['kept'] = np.sum(av[strong] * a0[strong]) / np.sum(a0[strong] ** 2) if strong.sum() >= 5 else np.nan
+            mean = 0.5 * (av + a0)
+            strong = free & (mean > 5 * rmad(mean[free]))
+            r['kept'] = np.sum(av[strong]) / np.sum(a0[strong]) if strong.sum() >= 3 else np.nan
             r['nstrong'] = int(strong.sum())
+            cv = np.nansum(st[name][0][:, ap], axis=1)
+            csum0, csumv = np.nansum(c0[free]), np.nansum(cv[free])
+            cerr = rmad(a0[free]) * np.sqrt(free.sum())
+            r['cont'] = csumv / csum0 if csum0 > 10 * cerr else np.nan
             rows[name].append(r)
     if not rows['ref']:
         print('  no IFUs with data')
         continue
-    print('  %-12s %5s %9s %9s %9s %9s %7s %7s %7s' % ('run', 'IFUs', 'spx free', 'spx OH', 'box free', 'box OH',
-                                                     'cm free', 'cm OH', 'kept'))
+    print('  %-12s %5s %9s %9s %9s %9s %7s %7s %7s %6s %7s %6s' % ('run', 'IFUs', 'spx free', 'spx OH', 'box free', 'box OH',
+                                                     'cm free', 'cm OH', 'kept', 'nline', 'cont', 'ncont'))
     for name, _ in runs:
         rr, r0 = rows[name], rows['ref']
         rel = lambda k: np.nanmedian([x[k] / y[k] for x, y in zip(rr, r0)])
-        print('  %-12s %5d %9.3f %9.3f %9.3f %9.3f %7.3f %7.3f %7.3f' % (
+        print('  %-12s %5d %9.3f %9.3f %9.3f %9.3f %7.3f %7.3f %7.3f %6d %7.3f %6d' % (
             name, len(rr), rel('spx_fr'), rel('spx_oh'), rel('box_fr'), rel('box_oh'),
             np.nanmedian([x['cm_fr'] for x in rr]), np.nanmedian([x['cm_oh'] for x in rr]),
-            np.nanmedian([x['kept'] for x in rr])))
-print('\nspx/box: variant / reference (median over IFUs); cm: absolute; kept: signal slope vs reference.')
+            np.nanmedian([x['kept'] for x in rr]), sum(np.isfinite(x['kept']) for x in rr),
+            np.nanmedian([x['cont'] for x in rr]), sum(np.isfinite(x['cont']) for x in rr)))
+print('\nspx/box: variant / reference (median over IFUs); cm: absolute; kept / cont: line / continuum flux variant /'
+      ' reference, median over the nline / ncont IFUs where it is measurable.')
